@@ -159,6 +159,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// Custom shader uniform values.
         custom_shader_uniforms: shadertoy.Uniforms,
 
+        /// Current cursor style for use in custom shader uniforms.
+        current_cursor_style: ?renderer.CursorStyle = null,
+
         /// Timestamp we rendered out first frame.
         ///
         /// This is used when updating custom shader uniforms.
@@ -2268,6 +2271,19 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     uniforms.cursor_change_time = uniforms.time;
                 }
             }
+
+            // Update cursor style uniform
+            // Convert cursor style enum to integer values for the shader
+            // 0 = block, 1 = block_hollow, 2 = bar, 3 = underline, 4 = lock, -1 = no cursor
+            self.custom_shader_uniforms.cursor_style = if (self.current_cursor_style) |style| 
+                switch (style) {
+                    .block => 0,
+                    .block_hollow => 1,
+                    .bar => 2,
+                    .underline => 3,
+                    .lock => 4,
+                }
+            else -1;
         }
 
         /// Convert the terminal state to GPU cells stored in CPU memory. These
@@ -2285,6 +2301,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         ) !void {
             self.draw_mutex.lock();
             defer self.draw_mutex.unlock();
+
+            // Store cursor style for use in custom shader uniforms
+            self.current_cursor_style = cursor_style_;
 
             // const start = try std.time.Instant.now();
             // const start_micro = std.time.microTimestamp();
