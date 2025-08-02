@@ -2362,6 +2362,16 @@ keybind: Keybinds = .{},
 ///    the same time as the `iTime` uniform, allowing you to compute the
 ///    time since the change by subtracting this from `iTime`.
 ///
+///  * `int iCursorStyle` - Style of the terminal cursor.
+///
+///    Integer value representing the current cursor style:
+///    - `0` = block cursor
+///    - `1` = hollow block cursor  
+///    - `2` = bar cursor
+///    - `3` = underline cursor
+///    - `4` = lock cursor (used in password input)
+///    - `-1` = no cursor (cursor is hidden)
+///
 /// If the shader fails to compile, the shader will be ignored. Any errors
 /// related to shader compilation will not show up as configuration errors
 /// and only show up in the log, since shader compilation happens after
