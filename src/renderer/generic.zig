@@ -3036,9 +3036,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // 
                 // TODO: Implement different interrupted styles based on `style` parameter:
                 // - .single, .double, .dotted, .dashed, .curly
-                _ = style;
-                _ = color;
-                _ = alpha;
+                // The style, color, and alpha parameters are available for future use
             }
         }
         
