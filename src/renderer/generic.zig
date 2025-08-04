@@ -48,8 +48,8 @@ const GlyphBounds = struct {
     grid_x: u16,
     grid_y: u16,
     /// Glyph position relative to cell origin
-    offset_x: i32,
-    offset_y: i32,
+    offset_x: i16,
+    offset_y: i16,
     /// Glyph size in pixels
     width: u32,
     height: u32,
@@ -3075,8 +3075,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 
                 // Calculate absolute glyph position
                 // Handle negative offsets by converting to signed first, then to unsigned
-                const cell_base_x = @as(i64, @intCast(bounds.grid_x)) * @as(i64, @intCast(cell_width));
-                const cell_base_y = @as(i64, @intCast(bounds.grid_y)) * @as(i64, @intCast(cell_height));
+                const cell_base_x = @as(i32, @intCast(bounds.grid_x)) * @as(i32, @intCast(cell_width));
+                const cell_base_y = @as(i32, @intCast(bounds.grid_y)) * @as(i32, @intCast(cell_height));
                 const glyph_abs_x = @as(u32, @intCast(@max(0, cell_base_x + bounds.offset_x)));
                 const glyph_abs_y = @as(u32, @intCast(@max(0, cell_base_y + bounds.offset_y)));
                 
@@ -3198,11 +3198,24 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Collect glyph bounds for interrupted underlines if enabled
             if (self.config.underline_interrupted) {
+                // Combine font glyph offset (i32) with shaper cell offset (i16)
+                // and clamp to i16 range for storage
+                const combined_x = std.math.clamp(
+                    render.glyph.offset_x + shaper_cell.x_offset,
+                    std.math.minInt(i16),
+                    std.math.maxInt(i16),
+                );
+                const combined_y = std.math.clamp(
+                    render.glyph.offset_y + shaper_cell.y_offset,
+                    std.math.minInt(i16),
+                    std.math.maxInt(i16),
+                );
+                
                 try self.glyph_bounds.append(self.alloc, .{
                     .grid_x = @intCast(x),
                     .grid_y = @intCast(y),
-                    .offset_x = render.glyph.offset_x + shaper_cell.x_offset,
-                    .offset_y = render.glyph.offset_y + shaper_cell.y_offset,
+                    .offset_x = @intCast(combined_x),
+                    .offset_y = @intCast(combined_y),
                     .width = render.glyph.width,
                     .height = render.glyph.height,
                 });
