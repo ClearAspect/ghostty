@@ -42,18 +42,7 @@ const DisplayLink = switch (builtin.os.tag) {
 
 const log = std.log.scoped(.generic_renderer);
 
-/// Glyph bounds information for interrupted underlines
-const GlyphBounds = struct {
-    /// Grid position of the cell (column, row)
-    grid_x: u16,
-    grid_y: u16,
-    /// Glyph position relative to cell origin
-    offset_x: i16,
-    offset_y: i16,
-    /// Glyph size in pixels
-    width: u32,
-    height: u32,
-};
+
 
 /// Create a renderer type with the provided graphics API wrapper.
 ///
@@ -194,9 +183,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         image_text_end: u32 = 0,
         image_virtual: bool = false,
 
-        /// Glyph bounds information for interrupted underlines
-        /// This tracks where glyphs are positioned so underlines can avoid them
-        glyph_bounds: std.ArrayListUnmanaged(GlyphBounds) = .{},
+
 
         /// Background image, if we have one.
         bg_image: ?imagepkg.Image = null,
@@ -767,7 +754,6 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
 
             self.cells.deinit(self.alloc);
-            self.glyph_bounds.deinit(self.alloc);
 
             self.font_shaper.deinit();
             self.font_shaper_cache.deinit(self.alloc);
@@ -2367,10 +2353,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // If we are doing a full rebuild, then we clear the entire cell buffer.
                 self.cells.reset();
                 
-                // Clear glyph bounds for interrupted underlines
-                if (self.config.underline_interrupted) {
-                    self.glyph_bounds.clearRetainingCapacity();
-                }
+
 
                 // We also reset our padding extension depending on the screen type
                 switch (self.config.padding_color) {
@@ -3055,7 +3038,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
         }
         
-        /// Check if an underline would intersect with any glyphs
+        /// Check if an underline would intersect with any glyphs using existing CellText data
         fn underlineIntersectsGlyphs(
             self: *Self,
             cell_x: u16,
@@ -3069,19 +3052,24 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             const cell_width = self.grid_metrics.cell_width;
             const cell_height = self.grid_metrics.cell_height;
             
-            for (self.glyph_bounds.items) |bounds| {
-                // Only check glyphs in the same row
-                if (bounds.grid_y != cell_y) continue;
+            // Check all text cells in the current row for glyph intersections
+            const row_index = cell_y;
+            if (row_index >= self.cells.fg_rows.lists.len) return false;
+            
+            const row_cells = self.cells.fg_rows.lists[row_index].items;
+            for (row_cells) |cell_text| {
+                // Only check glyphs that are marked as text (not cursor, underline, etc.)
+                // and are in the current row
+                if (cell_text.grid_pos[1] != cell_y) continue;
                 
-                // Calculate absolute glyph position
-                // Handle negative offsets by converting to signed first, then to unsigned
-                const cell_base_x = @as(i32, @intCast(bounds.grid_x)) * @as(i32, @intCast(cell_width));
-                const cell_base_y = @as(i32, @intCast(bounds.grid_y)) * @as(i32, @intCast(cell_height));
-                const glyph_abs_x = @as(u32, @intCast(@max(0, cell_base_x + bounds.offset_x)));
-                const glyph_abs_y = @as(u32, @intCast(@max(0, cell_base_y + bounds.offset_y)));
+                // Calculate absolute glyph position using the bearings from CellText
+                const cell_base_x = @as(i32, @intCast(cell_text.grid_pos[0])) * @as(i32, @intCast(cell_width));
+                const cell_base_y = @as(i32, @intCast(cell_text.grid_pos[1])) * @as(i32, @intCast(cell_height));
+                const glyph_abs_x = @as(u32, @intCast(@max(0, cell_base_x + cell_text.bearings[0])));
+                const glyph_abs_y = @as(u32, @intCast(@max(0, cell_base_y + cell_text.bearings[1])));
                 
-                const glyph_right = glyph_abs_x + bounds.width;
-                const glyph_bottom = glyph_abs_y + bounds.height;
+                const glyph_right = glyph_abs_x + cell_text.glyph_size[0];
+                const glyph_bottom = glyph_abs_y + cell_text.glyph_size[1];
                 
                 // Check horizontal overlap with the current cell's underline area
                 if (glyph_right <= x_start or glyph_abs_x >= x_end) {
@@ -3196,30 +3184,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 return;
             }
 
-            // Collect glyph bounds for interrupted underlines if enabled
-            if (self.config.underline_interrupted) {
-                // Combine font glyph offset (i32) with shaper cell offset (i16)
-                // and clamp to i16 range for storage
-                const combined_x = std.math.clamp(
-                    render.glyph.offset_x + shaper_cell.x_offset,
-                    std.math.minInt(i16),
-                    std.math.maxInt(i16),
-                );
-                const combined_y = std.math.clamp(
-                    render.glyph.offset_y + shaper_cell.y_offset,
-                    std.math.minInt(i16),
-                    std.math.maxInt(i16),
-                );
-                
-                try self.glyph_bounds.append(self.alloc, .{
-                    .grid_x = @intCast(x),
-                    .grid_y = @intCast(y),
-                    .offset_x = @intCast(combined_x),
-                    .offset_y = @intCast(combined_y),
-                    .width = render.glyph.width,
-                    .height = render.glyph.height,
-                });
-            }
+
 
             try self.cells.add(self.alloc, .text, .{
                 .atlas = switch (render.presentation) {
