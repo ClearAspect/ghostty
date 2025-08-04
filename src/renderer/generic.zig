@@ -2988,7 +2988,6 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             
             // Check which parts of the underline would intersect with glyphs
             const has_intersection = self.underlineIntersectsGlyphs(
-                @intCast(x),
                 @intCast(y),
                 abs_underline_y,
                 underline_thickness,
@@ -3034,14 +3033,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // In a future enhancement, we could implement custom sprite generation
                 // that draws interrupted underlines, but that would require significant
                 // changes to the sprite system
-                _ = style; // Ignore the style for now
+                // 
+                // TODO: Implement different interrupted styles based on `style` parameter:
+                // - .single, .double, .dotted, .dashed, .curly
+                _ = style;
+                _ = color;
+                _ = alpha;
             }
         }
         
         /// Check if an underline would intersect with any glyphs using existing CellText data
         fn underlineIntersectsGlyphs(
             self: *Self,
-            cell_x: u16,
             cell_y: u16,
             underline_y: u32,
             underline_thickness: u32,
