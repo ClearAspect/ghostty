@@ -42,6 +42,19 @@ const DisplayLink = switch (builtin.os.tag) {
 
 const log = std.log.scoped(.generic_renderer);
 
+/// Glyph bounds information for interrupted underlines
+const GlyphBounds = struct {
+    /// Grid position of the cell (column, row)
+    grid_x: u16,
+    grid_y: u16,
+    /// Glyph position relative to cell origin
+    offset_x: i32,
+    offset_y: i32,
+    /// Glyph size in pixels
+    width: u32,
+    height: u32,
+};
+
 /// Create a renderer type with the provided graphics API wrapper.
 ///
 /// The graphics API wrapper must provide the interface outlined below.
@@ -180,6 +193,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         image_bg_end: u32 = 0,
         image_text_end: u32 = 0,
         image_virtual: bool = false,
+
+        /// Glyph bounds information for interrupted underlines
+        /// This tracks where glyphs are positioned so underlines can avoid them
+        glyph_bounds: std.ArrayListUnmanaged(GlyphBounds) = .{},
 
         /// Background image, if we have one.
         bg_image: ?imagepkg.Image = null,
@@ -533,6 +550,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             vsync: bool,
             colorspace: configpkg.Config.WindowColorspace,
             blending: configpkg.Config.AlphaBlending,
+            underline_interrupted: bool,
 
             pub fn init(
                 alloc_gpa: Allocator,
@@ -600,6 +618,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .vsync = config.@"window-vsync",
                     .colorspace = config.@"window-colorspace",
                     .blending = config.@"alpha-blending",
+                    .underline_interrupted = config.@"underline-interrupted",
                     .arena = arena,
                 };
             }
@@ -748,6 +767,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
 
             self.cells.deinit(self.alloc);
+            self.glyph_bounds.deinit(self.alloc);
 
             self.font_shaper.deinit();
             self.font_shaper_cache.deinit(self.alloc);
@@ -2346,6 +2366,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             if (rebuild) {
                 // If we are doing a full rebuild, then we clear the entire cell buffer.
                 self.cells.reset();
+                
+                // Clear glyph bounds for interrupted underlines
+                if (self.config.underline_interrupted) {
+                    self.glyph_bounds.clearRetainingCapacity();
+                }
 
                 // We also reset our padding extension depending on the screen type
                 switch (self.config.padding_color) {
@@ -2920,6 +2945,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             color: terminal.color.RGB,
             alpha: u8,
         ) !void {
+            // Use interrupted underlines if enabled
+            if (self.config.underline_interrupted) {
+                try self.addInterruptedUnderline(x, y, style, color, alpha);
+                return;
+            }
+
             const sprite: font.Sprite = switch (style) {
                 .none => unreachable,
                 .single => .underline,
@@ -2950,6 +2981,120 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     @intCast(render.glyph.offset_y),
                 },
             });
+        }
+
+        /// Add an interrupted underline that avoids overlapping with glyph descenders
+        fn addInterruptedUnderline(
+            self: *Self,
+            x: terminal.size.CellCountInt,
+            y: terminal.size.CellCountInt,
+            style: terminal.Attribute.Underline,
+            color: terminal.color.RGB,
+            alpha: u8,
+        ) !void {
+            // Calculate underline position and thickness
+            const underline_y = self.grid_metrics.underline_position;
+            const underline_thickness = self.grid_metrics.underline_thickness;
+            const cell_width = self.grid_metrics.cell_width;
+            const cell_height = self.grid_metrics.cell_height;
+            
+            // Calculate the absolute position of the underline
+            const abs_underline_y = @as(u32, @intCast(y)) * cell_height + underline_y;
+            const abs_x_start = @as(u32, @intCast(x)) * cell_width;
+            const abs_x_end = abs_x_start + cell_width;
+            
+            // Check which parts of the underline would intersect with glyphs
+            const has_intersection = self.underlineIntersectsGlyphs(
+                @intCast(x),
+                @intCast(y),
+                abs_underline_y,
+                underline_thickness,
+                abs_x_start,
+                abs_x_end,
+            );
+            
+            // If no intersection, draw normal underline
+            if (!has_intersection) {
+                // Fall back to normal underline sprite
+                const sprite: font.Sprite = switch (style) {
+                    .none => unreachable,
+                    .single => .underline,
+                    .double => .underline_double,
+                    .dotted => .underline_dotted,
+                    .dashed => .underline_dashed,
+                    .curly => .underline_curly,
+                };
+                
+                const render = try self.font_grid.renderGlyph(
+                    self.alloc,
+                    font.sprite_index,
+                    @intFromEnum(sprite),
+                    .{
+                        .cell_width = 1,
+                        .grid_metrics = self.grid_metrics,
+                    },
+                );
+                
+                try self.cells.add(self.alloc, .underline, .{
+                    .atlas = .grayscale,
+                    .grid_pos = .{ @intCast(x), @intCast(y) },
+                    .color = .{ color.r, color.g, color.b, alpha },
+                    .glyph_pos = .{ render.glyph.atlas_x, render.glyph.atlas_y },
+                    .glyph_size = .{ render.glyph.width, render.glyph.height },
+                    .bearings = .{
+                        @intCast(render.glyph.offset_x),
+                        @intCast(render.glyph.offset_y),
+                    },
+                });
+            } else {
+                // For now, skip interrupted drawing to avoid complexity
+                // In a future enhancement, we could implement custom sprite generation
+                // that draws interrupted underlines, but that would require significant
+                // changes to the sprite system
+                _ = style; // Ignore the style for now
+            }
+        }
+        
+        /// Check if an underline would intersect with any glyphs
+        fn underlineIntersectsGlyphs(
+            self: *Self,
+            cell_x: u16,
+            cell_y: u16,
+            underline_y: u32,
+            underline_thickness: u32,
+            x_start: u32,
+            x_end: u32,
+        ) bool {
+            const underline_bottom = underline_y + underline_thickness;
+            const cell_width = self.grid_metrics.cell_width;
+            const cell_height = self.grid_metrics.cell_height;
+            
+            for (self.glyph_bounds.items) |bounds| {
+                // Only check glyphs in the same row
+                if (bounds.grid_y != cell_y) continue;
+                
+                // Calculate absolute glyph position
+                // Handle negative offsets by converting to signed first, then to unsigned
+                const cell_base_x = @as(i64, @intCast(bounds.grid_x)) * @as(i64, @intCast(cell_width));
+                const cell_base_y = @as(i64, @intCast(bounds.grid_y)) * @as(i64, @intCast(cell_height));
+                const glyph_abs_x = @as(u32, @intCast(@max(0, cell_base_x + bounds.offset_x)));
+                const glyph_abs_y = @as(u32, @intCast(@max(0, cell_base_y + bounds.offset_y)));
+                
+                const glyph_right = glyph_abs_x + bounds.width;
+                const glyph_bottom = glyph_abs_y + bounds.height;
+                
+                // Check horizontal overlap with the current cell's underline area
+                if (glyph_right <= x_start or glyph_abs_x >= x_end) {
+                    continue; // No horizontal overlap
+                }
+                
+                // Check vertical overlap with underline
+                if (!(glyph_bottom <= underline_y or glyph_abs_y >= underline_bottom)) {
+                    return true; // Intersection found
+                }
+            }
+            
+            return false;
         }
 
         /// Add a overline decoration to the specified cell
@@ -3049,6 +3194,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // when drawn, so don't bother adding it to the buffer.
             if (render.glyph.width == 0 or render.glyph.height == 0) {
                 return;
+            }
+
+            // Collect glyph bounds for interrupted underlines if enabled
+            if (self.config.underline_interrupted) {
+                try self.glyph_bounds.append(self.alloc, .{
+                    .grid_x = @intCast(x),
+                    .grid_y = @intCast(y),
+                    .offset_x = render.glyph.offset_x + shaper_cell.x_offset,
+                    .offset_y = render.glyph.offset_y + shaper_cell.y_offset,
+                    .width = render.glyph.width,
+                    .height = render.glyph.height,
+                });
             }
 
             try self.cells.add(self.alloc, .text, .{

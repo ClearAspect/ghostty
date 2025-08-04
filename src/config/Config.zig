@@ -375,6 +375,10 @@ pub const compatibility = std.StaticStringMap(
 /// Thickness in pixels of the underline.
 /// See the notes about adjustments in `adjust-cell-width`.
 @"adjust-underline-thickness": ?MetricModifier = null,
+
+/// Whether to use interrupted underlines that avoid overlapping with glyph descenders.
+/// This improves legibility by ensuring underlines don't obscure text.
+@"underline-interrupted": bool = false,
 /// Distance in pixels or percentage adjustment from the top of the cell to the top of the strikethrough.
 /// Increase to move strikethrough DOWN, decrease to move strikethrough UP.
 /// See the notes about adjustments in `adjust-cell-width`.
